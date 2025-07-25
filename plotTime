@@ -1,0 +1,257 @@
+#!/usr/bin/python
+
+# C:\Program Files\Python27\pythonw.exe
+
+# /cygdrive/c/'Program Files'/Python27/pythonw.exe  -->  Don't work
+# /bin/python2.7.exe
+
+DEBUG = False
+# DEBUG = True
+
+import argparse
+import re
+import socket
+import subprocess
+import sys
+
+
+def plotTime():
+
+    if DEBUG:
+        import pdb
+        pdb.set_trace()
+
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('filename', help='Convergence filename', nargs='?', default='Converge_dU')
+    parser.add_argument('-g',  help='Generate data for gnuplot', action='store_true', default=False)
+    parser.add_argument('-r',  '--refresh', help='refresh time interval', default=30, type=int)
+    parser.add_argument('--miny', '-ym', help='plot minimum y coordinate', default=None, type=float)
+    parser.add_argument('--maxy', '-y',  help='plot maximum y coordinate', default=None, type=float)
+    parser.add_argument('-x',  '--maxx', help='plot maximum x coordinate', default=None, type=float)
+    parser.add_argument('-xm', '--minx', help='plot minimum x coordinate', default=None, type=float)
+
+    args = parser.parse_args()
+    # print args
+
+
+    # Called from gnuplot to get the current time data.
+    if (args.g):
+        dataDict = readData(args.filename)
+        outputDataDict(dataDict)
+        return
+
+
+    # Create a process to run gnuplot and stop when cntl-c is entered.
+    # See if the file exists.
+    try:
+        with open(args.filename) as f:
+            pass
+
+    # python2 exception code
+    except IOError as e:
+        if e[0] == 2:
+            print('Could not open file {}.'.format(args.filename))
+            exit(1)
+
+        raise
+
+    # python3 exception code
+    # except FileNotFoundError:
+
+
+    # Run gnuplot
+    try:
+        if specHostname() == 'zagros':
+            gnuplot = 'gnuplot'
+        else:
+            gnuplot = '/gpfs/software/gnuplot-5.2.8/bin/gnuplot'
+        plotsp = subprocess.Popen([ gnuplot ], stdin=subprocess.PIPE)
+        plotsp.stdin.write('set autoscale;\n')
+        plotsp.stdin.write('set xtic auto;\n')
+        plotsp.stdin.write('set ytic auto;\n')
+
+        if args.miny and args.maxy:
+            plotsp.stdin.write('set yrange [{}:{}];\n'.format(args.miny, args.maxy))
+        elif args.miny:
+            plotsp.stdin.write('set yrange [{}:*];\n'.format(args.miny))
+        elif args.maxy:
+            plotsp.stdin.write('set yrange [*:{}];\n'.format(args.maxy))
+
+        if args.minx and args.maxx:
+            plotsp.stdin.write('set xrange [{}:{}];\n'.format(args.minx, args.maxx))
+        elif args.minx:
+            plotsp.stdin.write('set xrange [{}:*];\n'.format(args.minx))
+        elif args.maxx:
+            plotsp.stdin.write('set xrange [*:{}];\n'.format(args.maxx))
+
+        plotsp.stdin.write('set grid ytics lt 0 lw 1 lc rgb "#bbbbbb";\n')
+        plotsp.stdin.write('set grid xtics lt 0 lw 1 lc rgb "#bbbbbb";\n')
+        plotsp.stdin.write('set xlabel "Time Step";\n')
+        plotsp.stdin.write('set ylabel "Time";\n')
+        plotsp.stdin.write('set title "Time Statistics";\n')
+        plotsp.stdin.write('set style data lines;\n')
+        plotsp.stdin.write('while (1) {\n')
+        plotsp.stdin.write(('    plot "<plotTime -g {}" using 1:2 title "Momentum" axis x1y1,'
+                         +  '         ""                using 1:3 title "Poisson" axis x1y1,'
+                         +  '         ""                using 1:4 title "Conc" axis x1y1,'
+                         +  '         ""                using 1:5 title "Total" axis x1y1;\n').format(args.filename))
+        plotsp.stdin.write('    pause {};\n'.format(args.refresh))
+        # plotsp.stdin.write('    print "start refresh";\n')
+        plotsp.stdin.write('}\n')
+        plotsp.wait()
+
+    except KeyboardInterrupt:
+        plotsp.kill()
+        return
+
+
+
+# Read the Converge_dU file and make a table of times for each iteration.
+refloat =   r'([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)'
+# 10(momentum) 6.81e+01(s) 5.441188e-10
+remoment =  re.compile(r'^([0-9]+)\(momentum\) +' + refloat + r'\(s\) +' + refloat)
+# 10(poisson)  6.35e+01(s) Maxdiv=8.08e-05
+repoisson = re.compile(r'^([0-9]+)\(poisson\) +' + refloat + r'\(s\) +Maxdiv=' + refloat)
+# 1(Concentration eqn.) 2.80e+02(s)
+reconc1 =   re.compile(r'^([0-9]+)\(Concentration eqn\.\) +' + refloat + r'\(s\)')
+# 10(Convection-Diffusion) 4.26e+01(s)
+reconc2 =   re.compile(r'^([0-9]+)\(Convection-Diffusion\) +' + refloat + r'\(s\)')
+# 1(total)    4.54e+02(s)
+retotal =   re.compile(r'^([0-9]+)\(total\) +' + refloat + r'\(s\)')
+
+def readData(filename):
+
+    dataDict = { }
+    
+    currIter = -1
+    entry = [ 0, 0, 0, 0 ]
+        
+    try:
+        with open(filename) as f:
+            for line in f:
+                # 1(momentum) 7.20e+01(s) 4.137788e-06
+                sr = remoment.search(line)
+                if (sr):
+                    currIter, entry = isNewIter(sr, currIter, entry, dataDict)
+                    entry[0] = float(sr.group(2))
+                    entry[3] += float(sr.group(2))
+                    continue
+
+                # 1(poisson)  8.30e+01(s) Maxdiv=1.70e-06
+                sr = repoisson.search(line)
+                if (sr):
+                    currIter, entry = isNewIter(sr, currIter, entry, dataDict)
+                    entry[1] = float(sr.group(2))
+                    entry[3] += float(sr.group(2))
+                    continue
+
+                # 1(Concentration eqn.) 2.80e+02(s)
+                sr = reconc1.search(line)
+                if (sr):
+                    currIter, entry = isNewIter(sr, currIter, entry, dataDict)
+                    entry[2] = float(sr.group(2))
+                    entry[3] += float(sr.group(2))
+                    continue
+
+                # 10(Convection-Diffusion) 4.26e+01(s)
+                sr = reconc2.search(line)
+                if (sr):
+                    currIter, entry = isNewIter(sr, currIter, entry, dataDict)
+                    entry[2] = float(sr.group(2))
+                    entry[3] += float(sr.group(2))
+                    continue
+
+                # 1(total)    4.54e+02(s)
+                sr = retotal.search(line)
+                if (sr):
+                    currIter, entry = isNewIter(sr, currIter, entry, dataDict)
+                    entry[3] = float(sr.group(2))
+                    continue
+                
+        if currIter != -1 and entry[3] != 0:
+            dataDict = addToDict(dataDict, currIter, entry)
+
+    # python2 exception code
+    except IOError as e:
+        if e[0] == 2:
+            print('Could not open file {}.'.format(filename))
+            exit(1)
+
+        raise
+    
+    # python3 exception code
+    # except FileNotFoundError:
+
+    return dataDict
+
+# end of readData
+
+
+def outputDataDict(dataDict):
+    for i in sorted(dataDict.keys()):
+        print '{:d} {:g} {:g} {:g} {:g}'.format(i, dataDict[i][0], dataDict[i][1], dataDict[i][2], dataDict[i][3])
+
+# end of outputDataDict
+
+
+def sumTimeTable(dataDict):
+    cnt = 0
+    totalTime = 0
+    for i in dataDict.values():
+        cnt += 1
+        totalTime += i[3]
+
+    print '{:d} {:g} {:g}'.format(cnt, totalTime, totalTime / cnt)
+
+# end of sumTimeTable
+
+
+# See if this record defines a new iteration. If so, put the current one
+# in dataDict (unless currIter is -1) and set for new iter.
+def isNewIter(sr, currIter, entry, dataDict):
+    iter = int(sr.group(1))
+    if iter != currIter:
+        if currIter != -1:
+            dataDict = addToDict(dataDict, currIter, entry)
+        currIter = iter
+        entry = [ 0, 0, 0, 0 ]
+    return currIter, entry
+
+
+# Addes entries to the dictionary.  The entries are in time sequence and repeat
+# was CFD runs are rerun starting at points before the current maxKey.  These
+# will overlap with previous entries so this routine will delete all the ones
+# that come after.
+def addToDict(dataDict, key, load):
+
+    # If the key is already in the dictionay remove all entries from key down
+    # to the end.
+    if dataDict.get(key):
+        for i in sorted(dataDict.keys()):
+            if i > key:
+                del dataDict[i]
+
+    dataDict[key] = load
+    return dataDict
+
+
+
+# Is this hostname supported?
+def specHostname():
+    host = socket.getfqdn()
+    # print 'hostname is {}'.format(host)
+
+    if host == 'zagros':
+        return 'zagros'
+
+    if re.search('\.cm\.cluster$', host):
+        return 'seawulf'
+
+    print 'This host, {}, is not yet supported.'
+    exit(1)
+
+
+
+if __name__ == '__main__':
+    plotTime()
