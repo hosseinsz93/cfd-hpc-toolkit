@@ -1,0 +1,22 @@
+#!/bin/bash
+
+for file in "matchFiles a*"; do
+echo "$file"
+done
+
+
+# Using a filename reg/exp list, return all the filenames in the current
+# directory that match that name.  If not files match, the original
+# reg/exp is returns so a check is made for that and no filename are
+# returned.  Set the second paramters to true if you don't want this
+# behavior.
+
+matchFiles()
+{
+  unset filenames
+  for file in $1; do
+    filenames=( "${filenames[@]}" "$file" )
+  done
+
+  echo "${filenames[@]}"
+}

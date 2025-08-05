@@ -1,0 +1,215 @@
+#!/usr/bin/python
+
+# perry
+###!/home/wayne/bin/pyenv/bin/python3
+
+# seawulf
+# module load python/3.8.6
+###!/gpfs/software/python/3.8.6/bin/python3
+
+# zagros
+###!/usr/bin/python
+
+
+# For main program (e.g. without -g option)
+DEBUG = False
+# DEBUG = True
+
+# For -g option
+DEBUGG = False
+# DEBUGG = True
+
+import argparse
+import re
+import socket
+import subprocess
+import sys
+
+progName = 'plotFlux'
+
+def plotFlux():
+
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('filename', help='Fluxin filename', nargs='?', default='fluxin.dat')
+    parser.add_argument('-g', help='Generate data for gnuplot', action='store_true', default=False)
+    parser.add_argument('-r', '--refresh', help='refresh time interval', default=30, type=int)
+    parser.add_argument('-x',  '--maxx', help='plot maximum x coordinate', default=None, type=float)
+    parser.add_argument('-y',  '--maxy', help='plot maximum y coordinate', default=None, type=float)
+    parser.add_argument('-xm', '--minx', help='plot minimum x coordinate', default=None, type=float)
+    parser.add_argument('-ym', '--miny', help='plot minimum y coordinate', default=None, type=float)
+
+    args = parser.parse_args()
+    # print args
+
+
+    # Called from gnuplot to get the current time data.
+
+    if args.g:
+        if DEBUGG:
+            import pdb
+            pdb.set_trace()
+
+        dataDict = readData(args.filename)
+        outputDataDict(dataDict)
+        return
+
+
+    if DEBUG:
+        import pdb
+        pdb.set_trace()
+
+    # Create a process to run gnuplot and stop when cntl-c is entered.
+    # See if the file exists.
+    try:
+        with open(args.filename) as f:
+            pass
+
+    # python2 exception code
+    except IOError as e:
+        if e[0] == 2:
+            print('Could not open file {}.'.format(args.filename))
+            exit(1)
+        raise
+
+    # python3 exception code
+    # except FileNotFoundError:
+
+    # Run gnuplot
+    try:
+        if specHostname() == 'zagros':
+            gnuplot = 'gnuplot'
+        else:
+            gnuplot = '/gpfs/software/gnuplot-5.2.8/bin/gnuplot'
+        plotsp = subprocess.Popen([ gnuplot ], stdin=subprocess.PIPE)
+        plotsp.stdin.write(corFmt('set autoscale;\n'))
+        plotsp.stdin.write(corFmt('set xtic auto;\n'))
+        plotsp.stdin.write(corFmt('set ytic auto;\n'))
+
+        if args.miny and args.maxy:
+            plotsp.stdin.write(corFmt('set yrange [{}:{}];\n'.format(args.miny, args.maxy)))
+        elif args.miny:
+            plotsp.stdin.write(corFmt('set yrange [{}:*];\n'.format(args.miny)))
+        elif args.maxy:
+            plotsp.stdin.write(corFmt('set yrange [*:{}];\n'.format(args.maxy)))
+
+        if args.minx and args.maxx:
+            plotsp.stdin.write(corFmt('set xrange [{}:{}];\n'.format(args.minx, args.maxx)))
+        elif args.minx:
+            plotsp.stdin.write(corFmt('set xrange [{}:*];\n'.format(args.minx)))
+        elif args.maxx:
+            plotsp.stdin.write(corFmt('set xrange [*:{}];\n'.format(args.maxx)))
+
+        plotsp.stdin.write(corFmt('set grid ytics lt 0 lw 1 lc rgb "#bbbbbb";\n'))
+        plotsp.stdin.write(corFmt('set grid xtics lt 0 lw 1 lc rgb "#bbbbbb";\n'))
+        plotsp.stdin.write(corFmt('set xlabel "Time Step";\n'))
+        plotsp.stdin.write(corFmt('set ylabel "Fluxin";\n'))
+        plotsp.stdin.write(corFmt('set title "Fluxin Values";\n'))
+        plotsp.stdin.write(corFmt('set style data lines;\n'))
+        plotsp.stdin.write(corFmt('while (1) {\n'))
+        plotsp.stdin.write(corFmt('    plot "<{} -g {}" using 1:2 title "Fluxin0" axis x1y1, '
+                                  '         ""          using 1:3 title "Fluxin1" axis x1y1;\n').format(progName, args.filename))
+        plotsp.stdin.write(corFmt('    pause {};\n'.format(args.refresh)))
+        # plotsp.stdin.write(corFmt('    print "start refresh";\n'))
+        plotsp.stdin.write(corFmt('}\n'))
+        plotsp.stdin.flush()
+        plotsp.wait()
+
+    except KeyboardInterrupt:
+        plotsp.kill()
+        return
+
+
+
+# Read the flusin.dat file and make a table of times for each iteration.
+
+refloat = r'([-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)'
+reflux = re.compile(r'^([0-9]+)[ \t]+' + refloat + r'[ \t]+' + refloat)
+
+def readData(filename):
+
+    dataDict = { }
+    
+    currIter = -1
+        
+    try:
+        # print(filename)
+        with open(filename) as f:
+            for line in f:
+                # print(line)
+                searchResult = reflux.search(line)
+                if (searchResult):
+                    # print(searchResult.group(1), searchResult.group(2), searchResult.group(4))
+                    iter = int(searchResult.group(1))
+                    addToDict(dataDict, iter, [ float(searchResult.group(2)), float(searchResult.group(4)) ])
+
+    # python2 exception code
+    except IOError as e:
+        if e[0] == 2:
+            print('Could not open file {}.'.format(filename))
+            exit(1)
+
+        raise
+    
+    # python3 exception code
+    # except FileNotFoundError:
+
+    return dataDict
+
+# end of readData
+
+
+def outputDataDict(dataDict):
+    for i in sorted(dataDict.keys()):
+        # print(i, dataDict[i])
+        print('{:d} {:g} {:g}'.format(i, dataDict[i][0], dataDict[i][1]))
+
+# end of outputDataDict
+
+
+
+# Addes entries to the dictionary.  The entries are in time sequence and repeat
+# was CFD runs are rerun starting at points before the current maxKey.  These
+# will overlap with previous entries so this routine will delete all the ones
+# that come after.
+def addToDict(dataDict, key, load):
+
+    # If the key is already in the dictionay remove all entries from key down
+    # to the end.
+    if dataDict.get(key):
+        for i in sorted(dataDict.keys()):
+            if i > key:
+                del dataDict[i]
+
+    dataDict[key] = load
+    # print('add', key, load)
+
+    return dataDict
+
+
+
+# Is this hostname supported?
+def specHostname():
+    host = socket.getfqdn()
+    # print('hostname is {}'.format(host))
+
+    if host == 'zagros':
+        return 'zagros'
+
+    if re.search('\.cm\.cluster$', host):
+        return 'seawulf'
+
+    print('This host, {}, is not yet supported.')
+    exit(1)
+
+
+# Convert string format to proper type for plotsp.stdin.write
+# based on which version of python is running
+def corFmt(str):
+    if sys.version_info.major == 2:
+        return str
+    return str.encode("utf-8")
+
+
+if __name__ == '__main__':
+    plotFlux()

@@ -1,0 +1,20 @@
+#!/bin/bash
+
+export EXCLUDE=" \
+    --exclude=#*#
+    --exclude=*~
+    --exclude=.#*
+    --exclude=data \
+    --exclude=data-3.2 \
+    --exclude=data-3.2CD \
+    --exclude=gird.dat \
+    --exclude=ibmdata* \
+    --exclude=VFS-Geophysics-3.2 \
+    --exclude=VFS-Geophysics-3.2CD \
+"
+
+export SEADIR=`sed 's/^\/gpfs\/scratch\/woaks/\/mnt\/lustre\/wayne/' <<< "$PWD"`
+
+echo rsync -rlpgoDAXv --progress $EXCLUDE wayne@zagros:"$SEADIR"/ "$PWD"/
+
+rsync -aAXv --progress $EXCLUDE wayne@zagros:"$SEADIR"/ "$PWD"/

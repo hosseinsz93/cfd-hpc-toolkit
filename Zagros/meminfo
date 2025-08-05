@@ -1,0 +1,8 @@
+#!/bin/bash
+
+while true; do
+  cat /proc/meminfo   | grep MemTotal
+  cat /proc/$1/status | grep VmSize
+  cat /proc/$1/status | grep VmPeak
+  sleep 5
+done
